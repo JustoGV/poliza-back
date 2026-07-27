@@ -1,0 +1,45 @@
+# Dependencias
+node_modules/
+.pnpm-store/
+
+# Build
+dist/
+*.tsbuildinfo
+
+# Cliente de Prisma generado — se regenera con `pnpm db:generate`
+src/generated/
+
+# Entorno — NUNCA commitear secretos reales
+.env
+.env.*
+!.env.example
+
+# Tests
+coverage/
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+logs/
+
+# Datos locales de infraestructura
+docker/data/
+.minio/
+
+# Archivos de prueba de aseguradoras — contienen PII real (Ley 25.326)
+samples/**/*.xlsx
+samples/**/*.xls
+samples/**/*.csv
+uploads/
+
+# Editores / SO
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+
+# Herramientas
+.eslintcache
+.prettiercache

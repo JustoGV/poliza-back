@@ -1,0 +1,81 @@
+name: mf-seguros
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: mf_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-mfseguros}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mfseguros_dev}
+      POSTGRES_DB: ${POSTGRES_DB:-mfseguros}
+      # Colación determinística: el matching por descripción normalizada tiene
+      # que ordenar igual en cualquier máquina del equipo.
+      POSTGRES_INITDB_ARGS: '--locale-provider=icu --icu-locale=es-AR --encoding=UTF8'
+    ports:
+      - '${POSTGRES_PORT:-5432}:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-mfseguros} -d ${POSTGRES_DB:-mfseguros}']
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  redis:
+    image: redis:7-alpine
+    container_name: mf_redis
+    restart: unless-stopped
+    # BullMQ requiere maxmemory-policy=noeviction: si Redis desaloja claves,
+    # los jobs de importación desaparecen en silencio.
+    command: redis-server --appendonly yes --maxmemory-policy noeviction
+    ports:
+      - '${REDIS_PORT:-6379}:6379'
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  minio:
+    image: minio/minio:latest
+    container_name: mf_minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - '${MINIO_PORT:-9000}:9000'
+      - '${MINIO_CONSOLE_PORT:-9001}:9001'
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ['CMD', 'mc', 'ready', 'local']
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  # Crea el bucket una vez y termina. Evita el "bucket does not exist" del
+  # primer upload en una máquina recién clonada.
+  minio-init:
+    image: minio/mc:latest
+    container_name: mf_minio_init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 ${MINIO_ROOT_USER:-minioadmin} ${MINIO_ROOT_PASSWORD:-minioadmin} &&
+      mc mb --ignore-existing local/${MINIO_BUCKET:-importaciones} &&
+      mc anonymous set none local/${MINIO_BUCKET:-importaciones} &&
+      echo 'bucket listo';
+      "
+    restart: 'no'
+
+volumes:
+  pgdata:
+  redisdata:
+  miniodata:

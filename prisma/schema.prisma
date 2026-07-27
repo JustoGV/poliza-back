@@ -1,0 +1,651 @@
+// MF Seguros — esquema de datos
+//
+// Derivado de docs/MAPA_CANONICO.md. Si un campo no está en ese documento, no
+// va acá. Agregar un campo es editar el mapa canónico primero.
+//
+// Convención: modelos y campos en español camelCase; columnas y tablas en
+// snake_case vía @map. El SQL queda legible y el cliente TypeScript idiomático.
+//
+// Cuatro cosas de este diseño NO se pueden expresar en Prisma y se agregan a
+// mano al SQL de la migración inicial (F1-13):
+//   1. extensiones pg_trgm y unaccent + wrapper IMMUTABLE
+//   2. equivalencia.descripcion_normalizada como GENERATED ALWAYS ... STORED
+//   3. índice único PARCIAL sobre equivalencia WHERE flg_baja = 0
+//   4. índice GIN con gin_trgm_ops
+//   5. trigger que impide UPDATE y DELETE sobre audit_log
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "cjs"
+  runtime      = "nodejs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// =============================================================================
+// ENUMS
+// =============================================================================
+
+enum TipoPersona {
+  FISICA
+  JURIDICA
+
+  @@map("tipo_persona")
+}
+
+enum TipoDocumento {
+  DNI
+  LE
+  LC
+  CI
+  PASAPORTE
+  CUIT
+  CUIL
+
+  @@map("tipo_documento")
+}
+
+/// Cuatro ejes, no dos. Los datos reales traen 7 variantes de estado y 7 de
+/// movimiento, con inglés incluido. Ver docs/adr/0005.
+enum TipoCategoria {
+  RAMO
+  PRODUCTO
+  ESTADO
+  MOVIMIENTO
+
+  @@map("tipo_categoria")
+}
+
+enum OrigenEquivalencia {
+  AUTO_CODIGO
+  AUTO_NOMBRE
+  AUTO_FUZZY
+  MANUAL
+
+  @@map("origen_equivalencia")
+}
+
+/// Sólo dos valores porque la maqueta muestra dos. `poliza.estadoOrigen`
+/// conserva el crudo, así que abrir el enum después es una migración de datos
+/// y no una re-importación. Decisión abierta D6.
+enum EstadoPoliza {
+  VIGENTE
+  NO_VIGENTE
+
+  @@map("estado_poliza")
+}
+
+enum TipoMovimiento {
+  NUEVA
+  RENOVACION
+  VENCIDA_BAJA
+  SIN_CAMBIOS
+
+  @@map("tipo_movimiento")
+}
+
+enum TipoBien {
+  VEHICULO
+  INMUEBLE
+  PERSONA
+  OTRO
+
+  @@map("tipo_bien")
+}
+
+enum TipoArchivo {
+  XLSX
+  XLS
+  CSV
+  TXT
+
+  @@map("tipo_archivo")
+}
+
+enum EstadoImportacion {
+  PENDIENTE
+  PROCESANDO
+  COMPLETADA
+  COMPLETADA_CON_ERRORES
+  FALLIDA
+
+  @@map("estado_importacion")
+}
+
+enum RolUsuario {
+  ADMIN
+  OPERADOR
+  CONSULTA
+
+  @@map("rol_usuario")
+}
+
+enum EntidadSeguimiento {
+  POLIZA
+  CLIENTE
+
+  @@map("entidad_seguimiento")
+}
+
+enum EstadoSeguimiento {
+  PENDIENTE
+  EN_CURSO
+  RESUELTO
+  DESCARTADO
+
+  @@map("estado_seguimiento")
+}
+
+enum AccionAudit {
+  CREAR
+  ACTUALIZAR
+  BAJA
+  LOGIN
+  LOGIN_FALLIDO
+  EXPORTAR
+  IMPORTAR
+  HOMOLOGAR
+
+  @@map("accion_audit")
+}
+
+// =============================================================================
+// F1-01 · Aseguradora
+// =============================================================================
+
+/// Prevención ART y Prevención Retiro son DOS filas, no una. Son entidades
+/// legales distintas con vocabularios distintos: "REGIMEN GENERAL" significa
+/// ART Convenio en una y Retiro Individual en la otra. Ver docs/adr/0005.
+model Aseguradora {
+  id            String   @id @default(uuid(7))
+  codigoInterno String   @unique @map("codigo_interno") @db.VarChar(10)
+  nombre        String   @db.VarChar(200)
+  cuit          String?  @db.VarChar(11)
+  activo        Boolean  @default(true)
+  creadoEn      DateTime @default(now()) @map("creado_en") @db.Timestamptz(6)
+  actualizadoEn DateTime @updatedAt @map("actualizado_en") @db.Timestamptz(6)
+
+  polizas       Poliza[]
+  equivalencias Equivalencia[]
+  perfiles      PerfilImportacion[]
+
+  @@index([activo])
+  @@map("aseguradora")
+}
+
+// =============================================================================
+// F1-02 · Cliente
+// =============================================================================
+
+model Cliente {
+  id            String         @id @default(uuid(7))
+  tipoPersona   TipoPersona?   @map("tipo_persona")
+  /// Clave de identidad. Sólo dígitos, con dígito verificador validado.
+  /// Postgres trata los NULL como distintos, así que @unique sobre columna
+  /// nullable es exactamente el "UNIQUE WHERE cuit IS NOT NULL" que se busca.
+  cuit          String?        @unique @db.VarChar(11)
+  tipoDocumento TipoDocumento? @map("tipo_documento")
+  nroDocumento  String?        @map("nro_documento") @db.VarChar(20)
+
+  apellido       String? @db.VarChar(120)
+  nombre         String? @db.VarChar(120)
+  razonSocial    String? @map("razon_social") @db.VarChar(200)
+  /// Derivado, no se ingiere: razonSocial si es jurídica, si no "apellido, nombre".
+  /// Es el campo sobre el que se busca y el que se muestra.
+  nombreCompleto String  @map("nombre_completo") @db.VarChar(320)
+
+  /// No obligatoria: muchos clientes son personas jurídicas.
+  fechaNacimiento DateTime? @map("fecha_nacimiento") @db.Date
+
+  /// editable_manual: una importación no lo pisa. Decisión abierta D3.
+  email    String? @db.VarChar(200)
+  /// editable_manual.
+  telefono String? @db.VarChar(50)
+
+  domicilioCalle     String? @map("domicilio_calle") @db.VarChar(200)
+  domicilioLocalidad String? @map("domicilio_localidad") @db.VarChar(120)
+  domicilioProvincia String? @map("domicilio_provincia") @db.VarChar(80)
+  domicilioCp        String? @map("domicilio_cp") @db.VarChar(12)
+
+  /// CUIT ausente o inválido, o identidad resuelta por fallback.
+  requiereRevision Boolean  @default(false) @map("requiere_revision")
+  activo           Boolean  @default(true)
+  creadoEn         DateTime @default(now()) @map("creado_en") @db.Timestamptz(6)
+  actualizadoEn    DateTime @updatedAt @map("actualizado_en") @db.Timestamptz(6)
+
+  polizas Poliza[]
+
+  @@unique([tipoDocumento, nroDocumento])
+  @@index([nombreCompleto])
+  @@index([requiereRevision])
+  @@map("cliente")
+}
+
+// =============================================================================
+// F1-03 · Poliza
+// =============================================================================
+
+model Poliza {
+  id            String @id @default(uuid(7))
+  aseguradoraId String @map("aseguradora_id")
+  clienteId     String @map("cliente_id")
+  numeroPoliza  String @map("numero_poliza") @db.VarChar(60)
+  /// Nunca NULL: rompería la clave natural. Default '0' cuando el archivo no
+  /// trae endoso. En los archivos viene como "1240112/1" = numero/endoso.
+  numeroEndoso  String @default("0") @map("numero_endoso") @db.VarChar(20)
+
+  /// NULL es válido y esperado: la póliza entra igual aunque no homologue.
+  /// Regla 4 de CLAUDE.md — el sistema sirve el día 1 con el diccionario vacío.
+  ramoId         String? @map("ramo_id")
+  productoId     String? @map("producto_id")
+  /// El valor crudo se conserva SIEMPRE, aunque haya homologado. Sin esto no
+  /// hay re-homologación retroactiva.
+  ramoOrigen     String? @map("ramo_origen") @db.VarChar(200)
+  productoOrigen String? @map("producto_origen") @db.VarChar(200)
+
+  vigenciaDesde DateTime? @map("vigencia_desde") @db.Date
+  vigenciaHasta DateTime? @map("vigencia_hasta") @db.Date
+
+  estado       EstadoPoliza @default(VIGENTE)
+  estadoOrigen String?      @map("estado_origen") @db.VarChar(80)
+
+  /// Decisión abierta D1: se ingieren y persisten, pero la API no los serializa
+  /// mientras FEATURE_DATOS_FINANCIEROS esté en false. El dato histórico existe
+  /// desde el día 1; prenderlo es un flag, no una re-importación.
+  prima           Decimal? @db.Decimal(15, 2)
+  premio          Decimal? @db.Decimal(15, 2)
+  comisionPct     Decimal? @map("comision_pct") @db.Decimal(7, 4)
+  moneda          String   @default("ARS") @db.Char(3)
+  formaPago       String?  @map("forma_pago") @db.VarChar(60)
+  productorCodigo String?  @map("productor_codigo") @db.VarChar(40)
+
+  /// true si ramoId o productoId quedó NULL. Se recalcula al re-homologar.
+  sinHomologar Boolean @default(true) @map("sin_homologar")
+  /// Dejó de venir en un snapshot. NUNCA se borra la fila (regla 5).
+  posibleBaja  Boolean @default(false) @map("posible_baja")
+
+  /// La fila cruda completa. Es lo que hace explicable una importación de hace
+  /// ocho meses.
+  rawSource Json? @map("raw_source") @db.JsonB
+
+  importacionId String?  @map("importacion_id")
+  creadoEn      DateTime @default(now()) @map("creado_en") @db.Timestamptz(6)
+  actualizadoEn DateTime @updatedAt @map("actualizado_en") @db.Timestamptz(6)
+
+  aseguradora Aseguradora        @relation(fields: [aseguradoraId], references: [id], onDelete: Restrict)
+  cliente     Cliente            @relation(fields: [clienteId], references: [id], onDelete: Restrict)
+  ramo        CategoriaCanonica? @relation("PolizaRamo", fields: [ramoId], references: [id], onDelete: Restrict)
+  producto    CategoriaCanonica? @relation("PolizaProducto", fields: [productoId], references: [id], onDelete: Restrict)
+  importacion Importacion?       @relation(fields: [importacionId], references: [id], onDelete: SetNull)
+
+  bienes      BienAsegurado[]
+  coberturas  Cobertura[]
+  historial   PolizaHistorial[]
+  movimientos PolizaMovimiento[]
+
+  /// LA clave natural de deduplicación. No hay otra.
+  @@unique([aseguradoraId, numeroPoliza, numeroEndoso])
+  @@index([clienteId])
+  @@index([estado])
+  @@index([vigenciaHasta])
+  @@index([sinHomologar])
+  @@index([aseguradoraId, ramoId])
+  @@index([productoId])
+  @@map("poliza")
+}
+
+// =============================================================================
+// F1-04 · Bien asegurado
+// =============================================================================
+
+model BienAsegurado {
+  id       String @id @default(uuid(7))
+  polizaId String @map("poliza_id")
+  orden    Int    @default(1)
+
+  descripcion String?   @db.VarChar(300)
+  tipo        TipoBien?
+  /// PII — Ley 25.326. No puede aparecer en logs.
+  patente     String?   @db.VarChar(15)
+  marca       String?   @db.VarChar(80)
+  modelo      String?   @db.VarChar(120)
+  anio        Int?      @db.SmallInt
+  /// PII.
+  chasis      String?   @db.VarChar(40)
+  /// PII.
+  motor       String?   @db.VarChar(40)
+
+  sumaAsegurada Decimal? @map("suma_asegurada") @db.Decimal(15, 2)
+  creadoEn      DateTime @default(now()) @map("creado_en") @db.Timestamptz(6)
+
+  poliza Poliza @relation(fields: [polizaId], references: [id], onDelete: Cascade)
+
+  @@index([polizaId])
+  @@index([patente])
+  @@map("bien_asegurado")
+}
+
+// =============================================================================
+// F1-05 · Cobertura
+// =============================================================================
+
+model Cobertura {
+  id       String @id @default(uuid(7))
+  polizaId String @map("poliza_id")
+
+  /// Candidato a un quinto eje de homologación. Por eso se guarda el crudo.
+  codigoOrigen  String?  @map("codigo_origen") @db.VarChar(60)
+  descripcion   String?  @db.VarChar(300)
+  sumaAsegurada Decimal? @map("suma_asegurada") @db.Decimal(15, 2)
+  franquicia    Decimal? @db.Decimal(15, 2)
+  creadoEn      DateTime @default(now()) @map("creado_en") @db.Timestamptz(6)
+
+  poliza Poliza @relation(fields: [polizaId], references: [id], onDelete: Cascade)
+
+  @@index([polizaId])
+  @@map("cobertura")
+}
+
+// =============================================================================
+// F1-06 · Categoria canonica  (= NOMENCLA)
+// =============================================================================
+
+model CategoriaCanonica {
+  id          String        @id @default(uuid(7))
+  tipo        TipoCategoria
+  codigo      String        @db.VarChar(40)
+  descripcion String        @db.VarChar(200)
+  /// PRODUCTO cuelga de su RAMO. Permite acotar la búsqueda de producto al
+  /// ramo ya resuelto y desambiguar sinónimos como "REGIMEN GENERAL".
+  padreId     String?       @map("padre_id")
+  activo      Boolean       @default(true)
+  creadoEn    DateTime      @default(now()) @map("creado_en") @db.Timestamptz(6)
+
+  padre CategoriaCanonica?  @relation("Jerarquia", fields: [padreId], references: [id], onDelete: Restrict)
+  hijos CategoriaCanonica[] @relation("Jerarquia")
+
+  equivalencias       Equivalencia[]
+  polizasComoRamo     Poliza[]       @relation("PolizaRamo")
+  polizasComoProducto Poliza[]       @relation("PolizaProducto")
+
+  @@unique([tipo, codigo])
+  @@index([tipo, activo])
+  @@map("categoria_canonica")
+}
+
+// =============================================================================
+// F1-07 · Equivalencia  (= EQUINOME)
+// =============================================================================
+
+/// El diccionario. Cuelga de la ASEGURADORA, no del perfil de archivo: cuando
+/// una compañía cambia el layout de su Excel, su vocabulario no cambia.
+model Equivalencia {
+  id                  String        @id @default(uuid(7))
+  categoriaCanonicaId String        @map("categoria_canonica_id")
+  aseguradoraId       String        @map("aseguradora_id")
+  tipo                TipoCategoria
+  codigoExterno       String?       @map("codigo_externo") @db.VarChar(120)
+  descripcionExterna  String?       @map("descripcion_externa") @db.VarChar(300)
+
+  /// GENERATED ALWAYS AS (...) STORED — se convierte a mano en el SQL de la
+  /// migración; Prisma no tiene columnas generadas. La app NUNCA la escribe.
+  /// OJO: unaccent() no es IMMUTABLE y una columna GENERATED lo exige. Hace
+  /// falta un wrapper IMMUTABLE propio o la migración falla con
+  /// "generation expression is not immutable".
+  descripcionNormalizada String? @map("descripcion_normalizada") @db.VarChar(300)
+
+  /// Baja lógica. Nada se borra (regla 5).
+  flgBaja     Int                @default(0) @map("flg_baja") @db.SmallInt
+  origen      OrigenEquivalencia
+  /// 0..100. Permite auditar los matches flojos. AUTO_FUZZY nunca es silencioso.
+  confianza   Int                @db.SmallInt
+  resueltoPor String?            @map("resuelto_por")
+  resueltoEn  DateTime?          @map("resuelto_en") @db.Timestamptz(6)
+  creadoEn    DateTime           @default(now()) @map("creado_en") @db.Timestamptz(6)
+
+  categoriaCanonica CategoriaCanonica @relation(fields: [categoriaCanonicaId], references: [id], onDelete: Restrict)
+  aseguradora       Aseguradora       @relation(fields: [aseguradoraId], references: [id], onDelete: Cascade)
+  usuario           Usuario?          @relation(fields: [resueltoPor], references: [id], onDelete: SetNull)
+
+  /// El índice único REAL es parcial (WHERE flg_baja = 0) y se crea a mano en
+  /// la migración. Éste queda como documentación de la intención.
+  @@index([aseguradoraId, tipo, codigoExterno])
+  @@index([categoriaCanonicaId])
+  @@map("equivalencia")
+}
+
+// =============================================================================
+// F1-08 · Perfil de importacion y reglas  (nivel 1, estructural)
+// =============================================================================
+
+model PerfilImportacion {
+  id             String      @id @default(uuid(7))
+  aseguradoraId  String      @map("aseguradora_id")
+  version        Int         @default(1)
+  nombre         String      @db.VarChar(120)
+  /// Resuelto por ParserRegistry. "generic-excel" cubre ~80 % de los casos.
+  parserKey      String      @map("parser_key") @db.VarChar(60)
+  tipoArchivo    TipoArchivo @map("tipo_archivo")
+  nombreHoja     String?     @map("nombre_hoja") @db.VarChar(120)
+  filaEncabezado Int         @default(1) @map("fila_encabezado")
+  delimitador    String?     @db.VarChar(4)
+  encoding       String      @default("utf8") @db.VarChar(20)
+  /// Snapshot = padrón completo. Novedades = sólo los cambios. Decisión abierta D4.
+  esSnapshot     Boolean     @default(true) @map("es_snapshot")
+  activo         Boolean     @default(true)
+  creadoEn       DateTime    @default(now()) @map("creado_en") @db.Timestamptz(6)
+
+  aseguradora   Aseguradora         @relation(fields: [aseguradoraId], references: [id], onDelete: Cascade)
+  reglas        ReglaHomologacion[]
+  importaciones Importacion[]
+
+  @@unique([aseguradoraId, version])
+  @@index([parserKey])
+  @@map("perfil_importacion")
+}
+
+model ReglaHomologacion {
+  id             String  @id @default(uuid(7))
+  perfilId       String  @map("perfil_id")
+  columnaOrigen  String  @map("columna_origen") @db.VarChar(200)
+  campoDestino   String  @map("campo_destino") @db.VarChar(80)
+  /// Transformador nombrado y reutilizable: fecha, monto, cuit, texto,
+  /// split_poliza_endoso. No es código suelto en el parser.
+  transformacion String? @db.VarChar(60)
+  requerido      Boolean @default(false)
+  valorDefault   String? @map("valor_default") @db.VarChar(200)
+  orden          Int     @default(0)
+
+  perfil PerfilImportacion @relation(fields: [perfilId], references: [id], onDelete: Cascade)
+
+  @@unique([perfilId, campoDestino])
+  @@map("regla_homologacion")
+}
+
+// =============================================================================
+// F1-09 · Importacion y errores  (trazabilidad)
+// =============================================================================
+
+model Importacion {
+  id            String            @id @default(uuid(7))
+  perfilId      String            @map("perfil_id")
+  /// SHA-256. UNIQUE: el mismo archivo no se procesa dos veces.
+  archivoHash   String            @unique @map("archivo_hash") @db.Char(64)
+  storageKey    String            @map("storage_key") @db.VarChar(400)
+  nombreArchivo String            @map("nombre_archivo") @db.VarChar(300)
+  /// Período que representa el archivo, formato YYYY-MM.
+  periodo       String?           @db.VarChar(7)
+  estado        EstadoImportacion @default(PENDIENTE)
+
+  filasLeidas         Int @default(0) @map("filas_leidas")
+  filasOk             Int @default(0) @map("filas_ok")
+  filasError          Int @default(0) @map("filas_error")
+  polizasNuevas       Int @default(0) @map("polizas_nuevas")
+  polizasActualizadas Int @default(0) @map("polizas_actualizadas")
+  polizasSinHomologar Int @default(0) @map("polizas_sin_homologar")
+
+  usuarioId    String?   @map("usuario_id")
+  iniciadoEn   DateTime? @map("iniciado_en") @db.Timestamptz(6)
+  finalizadoEn DateTime? @map("finalizado_en") @db.Timestamptz(6)
+  creadoEn     DateTime  @default(now()) @map("creado_en") @db.Timestamptz(6)
+
+  perfil  PerfilImportacion @relation(fields: [perfilId], references: [id], onDelete: Restrict)
+  usuario Usuario?          @relation(fields: [usuarioId], references: [id], onDelete: SetNull)
+
+  errores     ImportacionError[]
+  polizas     Poliza[]
+  historial   PolizaHistorial[]
+  movimientos PolizaMovimiento[]
+
+  @@index([perfilId, creadoEn])
+  @@index([estado])
+  @@map("importacion")
+}
+
+/// Una fila mala nunca aborta el archivo (regla 3). Queda acá con su número de
+/// fila y su motivo, y el proceso sigue.
+model ImportacionError {
+  id            String   @id @default(uuid(7))
+  importacionId String   @map("importacion_id")
+  nroFila       Int      @map("nro_fila")
+  columna       String?  @db.VarChar(200)
+  codigoError   String   @map("codigo_error") @db.VarChar(60)
+  mensaje       String   @db.VarChar(500)
+  payloadCrudo  Json?    @map("payload_crudo") @db.JsonB
+  creadoEn      DateTime @default(now()) @map("creado_en") @db.Timestamptz(6)
+
+  importacion Importacion @relation(fields: [importacionId], references: [id], onDelete: Cascade)
+
+  @@index([importacionId, nroFila])
+  @@map("importacion_error")
+}
+
+// =============================================================================
+// F1-10 · Historial y movimientos de poliza
+// =============================================================================
+
+model PolizaHistorial {
+  id            String   @id @default(uuid(7))
+  polizaId      String   @map("poliza_id")
+  importacionId String?  @map("importacion_id")
+  campo         String   @db.VarChar(80)
+  valorAnterior String?  @map("valor_anterior") @db.VarChar(500)
+  valorNuevo    String?  @map("valor_nuevo") @db.VarChar(500)
+  creadoEn      DateTime @default(now()) @map("creado_en") @db.Timestamptz(6)
+
+  poliza      Poliza       @relation(fields: [polizaId], references: [id], onDelete: Cascade)
+  importacion Importacion? @relation(fields: [importacionId], references: [id], onDelete: SetNull)
+
+  @@index([polizaId, creadoEn])
+  @@map("poliza_historial")
+}
+
+model PolizaMovimiento {
+  id            String         @id @default(uuid(7))
+  polizaId      String         @map("poliza_id")
+  importacionId String?        @map("importacion_id")
+  tipo          TipoMovimiento
+  /// Si el archivo declaró un movimiento distinto al calculado, la discrepancia
+  /// se registra acá. Gana el cálculo del sistema.
+  detalle       String?        @db.VarChar(300)
+  detectadoEn   DateTime       @default(now()) @map("detectado_en") @db.Timestamptz(6)
+
+  poliza      Poliza       @relation(fields: [polizaId], references: [id], onDelete: Cascade)
+  importacion Importacion? @relation(fields: [importacionId], references: [id], onDelete: SetNull)
+
+  @@index([polizaId])
+  @@index([importacionId, tipo])
+  @@map("poliza_movimiento")
+}
+
+// =============================================================================
+// F1-11 · Usuario, refresh token y audit log
+// =============================================================================
+
+model Usuario {
+  id            String     @id @default(uuid(7))
+  email         String     @unique @db.VarChar(200)
+  /// argon2id. JAMÁS se serializa en una respuesta.
+  passwordHash  String     @map("password_hash") @db.VarChar(255)
+  nombre        String     @db.VarChar(200)
+  rol           RolUsuario @default(OPERADOR)
+  activo        Boolean    @default(true)
+  ultimoLoginEn DateTime?  @map("ultimo_login_en") @db.Timestamptz(6)
+  creadoEn      DateTime   @default(now()) @map("creado_en") @db.Timestamptz(6)
+  actualizadoEn DateTime   @updatedAt @map("actualizado_en") @db.Timestamptz(6)
+
+  refreshTokens RefreshToken[]
+  importaciones Importacion[]
+  equivalencias Equivalencia[]
+  seguimientos  Seguimiento[]
+  auditoria     AuditLog[]
+
+  @@map("usuario")
+}
+
+/// Refresh rotativo. Si se detecta reuso de un token ya rotado, se revoca la
+/// FAMILIA entera: es la señal de que alguien copió la cookie.
+model RefreshToken {
+  id        String   @id @default(uuid(7))
+  usuarioId String   @map("usuario_id")
+  tokenHash String   @unique @map("token_hash") @db.Char(64)
+  /// Todos los tokens que descienden de un mismo login comparten familia.
+  familiaId String   @map("familia_id")
+  revocado  Boolean  @default(false)
+  expiraEn  DateTime @map("expira_en") @db.Timestamptz(6)
+  creadoEn  DateTime @default(now()) @map("creado_en") @db.Timestamptz(6)
+
+  usuario Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+
+  @@index([usuarioId])
+  @@index([familiaId])
+  @@index([expiraEn])
+  @@map("refresh_token")
+}
+
+/// Solo-append. El trigger que impide UPDATE y DELETE se crea en la migración:
+/// Prisma no puede expresarlo.
+model AuditLog {
+  id          String      @id @default(uuid(7))
+  usuarioId   String?     @map("usuario_id")
+  accion      AccionAudit
+  entidadTipo String      @map("entidad_tipo") @db.VarChar(60)
+  entidadId   String?     @map("entidad_id")
+  /// Nunca PII en claro ni secretos. Ver redaction de Pino (F2-10).
+  datos       Json?       @db.JsonB
+  ip          String?     @db.VarChar(45)
+  userAgent   String?     @map("user_agent") @db.VarChar(400)
+  creadoEn    DateTime    @default(now()) @map("creado_en") @db.Timestamptz(6)
+
+  usuario Usuario? @relation(fields: [usuarioId], references: [id], onDelete: SetNull)
+
+  @@index([entidadTipo, entidadId])
+  @@index([usuarioId, creadoEn])
+  @@map("audit_log")
+}
+
+// =============================================================================
+// F1-12 · Seguimiento
+// =============================================================================
+
+model Seguimiento {
+  id            String             @id @default(uuid(7))
+  usuarioId     String             @map("usuario_id")
+  entidadTipo   EntidadSeguimiento @map("entidad_tipo")
+  /// Polimorfismo controlado: el enum acota a POLIZA o CLIENTE y no hay FK.
+  /// La integridad la valida el servicio, no la base.
+  entidadId     String             @map("entidad_id")
+  nota          String             @db.VarChar(2000)
+  estado        EstadoSeguimiento  @default(PENDIENTE)
+  creadoEn      DateTime           @default(now()) @map("creado_en") @db.Timestamptz(6)
+  actualizadoEn DateTime           @updatedAt @map("actualizado_en") @db.Timestamptz(6)
+
+  usuario Usuario @relation(fields: [usuarioId], references: [id], onDelete: Restrict)
+
+  @@index([entidadTipo, entidadId])
+  @@index([estado])
+  @@map("seguimiento")
+}

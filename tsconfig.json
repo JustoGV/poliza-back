@@ -1,0 +1,57 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "moduleDetection": "force",
+
+    /* Strict — CLAUDE.md: nada de `any`, si hace falta `unknown` + narrowing */
+    "strict": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "useUnknownInCatchVariables": true,
+
+    /* Clave para el ETL: una celda ausente es `undefined`, no un valor.
+       Obliga a manejar la fila incompleta en vez de propagar basura. */
+    "noUncheckedIndexedAccess": true,
+
+    /* Distingue "campo ausente" de "campo en null" — semánticamente distintos
+       cuando un archivo de aseguradora no trae la columna. */
+    "exactOptionalPropertyTypes": true,
+
+    "forceConsistentCasingInFileNames": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+
+    /* Default de NestJS 11. El package.json no declara "type": "module",
+       así que nodenext resuelve en modo CommonJS. Los paquetes ESM-only
+       (file-type) se cargan con `await import(...)`. */
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "resolvePackageJsonExports": true,
+
+    /* NestJS resuelve la inyección por tipo leyendo `design:paramtypes`.
+       Sin estos dos flags el contenedor de DI no encuentra nada. */
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+
+    "outDir": "./dist",
+    "baseUrl": "./",
+    "paths": {
+      "@/*": ["src/*"]
+    },
+
+    "declaration": false,
+    "removeComments": false,
+    "sourceMap": true,
+    "incremental": true,
+    "allowSyntheticDefaultImports": true,
+    "isolatedModules": true,
+    "types": ["node", "jest"]
+  },
+  "include": ["src/**/*", "test/**/*", "prisma/**/*"],
+  "exclude": ["node_modules", "dist"]
+}

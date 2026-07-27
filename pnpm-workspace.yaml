@@ -1,0 +1,17 @@
+# No es un monorepo — este archivo existe sólo porque pnpm >= 10 requiere que
+# los settings de instalación (qué scripts postinstall se permiten correr)
+# vivan acá, incluso en un proyecto de un solo paquete.
+allowBuilds:
+  '@prisma/engines': true
+  argon2: true
+  esbuild: true
+  msgpackr-extract: true
+  prisma: true
+  unrs-resolver: true
+  # Telemetría de terceros. No aporta nada al proyecto.
+  '@scarf/scarf': false
+  # Dependencias opcionales de testcontainers (soporte SSH). Los tests hablan
+  # con Docker por socket local, no por SSH — no hace falta compilarlas.
+  cpu-features: false
+  protobufjs: false
+  ssh2: false
