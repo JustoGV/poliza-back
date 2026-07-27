@@ -1,8 +1,0 @@
-{
-  "*.{ts,tsx,mjs,cjs,js,jsx}": [
-    "eslint --fix --max-warnings=0 --no-warn-ignored",
-    "prettier --write --ignore-unknown"
-  ],
-  "*.{json,yml,yaml}": ["prettier --write --ignore-unknown"],
-  "prisma/schema.prisma": ["pnpm exec prisma format"]
-}
