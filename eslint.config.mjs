@@ -93,6 +93,10 @@ export default tseslint.config(
       '@typescript-eslint/no-non-null-assertion': 'off',
       '@typescript-eslint/no-unsafe-assignment': 'off',
       'no-console': 'off',
+      // Falso positivo conocido con jest.Mocked<T>: `expect(obj.metodo).toHaveBeenCalledWith(...)`
+      // referencia el método sin invocarlo, y la regla no distingue eso de un
+      // desprendimiento real de `this`.
+      '@typescript-eslint/unbound-method': 'off',
     },
   },
 
