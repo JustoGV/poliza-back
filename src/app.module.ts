@@ -10,6 +10,8 @@ import { AuditoriaModule } from './modules/auditoria/auditoria.module'
 import { AuthModule } from './modules/auth/auth.module'
 import { JwtAuthGuard } from './modules/auth/guards/jwt-auth.guard'
 import { RolesGuard } from './modules/auth/guards/roles.guard'
+import { ClientesModule } from './modules/clientes/clientes.module'
+import { PolizasModule } from './modules/polizas/polizas.module'
 import { UsuariosModule } from './modules/usuarios/usuarios.module'
 import { PrismaModule } from './prisma/prisma.module'
 
@@ -27,6 +29,8 @@ import { PrismaModule } from './prisma/prisma.module'
     AuditoriaModule,
     AuthModule,
     AseguradorasModule,
+    ClientesModule,
+    PolizasModule,
   ],
   controllers: [AppController],
   providers: [
