@@ -81,4 +81,8 @@ export class AppConfigService {
   get throttleLoginLimit(): number {
     return this.configService.get('THROTTLE_LOGIN_LIMIT', { infer: true })
   }
+
+  get featureDatosFinancieros(): boolean {
+    return this.configService.get('FEATURE_DATOS_FINANCIEROS', { infer: true })
+  }
 }

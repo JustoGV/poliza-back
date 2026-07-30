@@ -34,6 +34,11 @@ export const envSchema = z.object({
   THROTTLE_LIMIT: z.coerce.number().int().positive().default(120),
   THROTTLE_LOGIN_TTL_MS: z.coerce.number().int().positive().default(900000),
   THROTTLE_LOGIN_LIMIT: z.coerce.number().int().positive().default(5),
+
+  // --- Features (decisiones abiertas, ver CLAUDE.md) --------------------------
+  // D1: la maqueta no muestra prima/premio/comisión. El dato se persiste
+  // siempre; este flag sólo controla si la API lo serializa.
+  FEATURE_DATOS_FINANCIEROS: z.stringbool().default(false),
 })
 
 export type EnvSchema = z.infer<typeof envSchema>
