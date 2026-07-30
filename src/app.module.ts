@@ -11,6 +11,7 @@ import { AuthModule } from './modules/auth/auth.module'
 import { JwtAuthGuard } from './modules/auth/guards/jwt-auth.guard'
 import { RolesGuard } from './modules/auth/guards/roles.guard'
 import { ClientesModule } from './modules/clientes/clientes.module'
+import { IngestaModule } from './modules/ingesta/ingesta.module'
 import { PolizasModule } from './modules/polizas/polizas.module'
 import { UsuariosModule } from './modules/usuarios/usuarios.module'
 import { PrismaModule } from './prisma/prisma.module'
@@ -30,6 +31,7 @@ import { PrismaModule } from './prisma/prisma.module'
     AuthModule,
     AseguradorasModule,
     ClientesModule,
+    IngestaModule,
     PolizasModule,
   ],
   controllers: [AppController],

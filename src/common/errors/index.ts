@@ -1,5 +1,7 @@
+export * from './archivo-malformado.error'
 export * from './credenciales-invalidas.error'
 export * from './entidad-duplicada.error'
 export * from './entidad-no-encontrada.error'
 export * from './error-de-negocio'
+export * from './parser-no-encontrado.error'
 export * from './sesion-invalida.error'
